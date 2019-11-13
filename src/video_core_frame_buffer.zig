@@ -6,8 +6,7 @@ pub const FrameBuffer = struct {
     physical_height: u32,
     pitch: u32,
     pixel_order: u32,
-    bytes: [*]u8,
-    words: [*]u32,
+    words: [*]volatile u32,
     size: u32,
     virtual_height: u32,
     virtual_width: u32,
@@ -18,29 +17,27 @@ pub const FrameBuffer = struct {
     overscan_left: u32,
     overscan_right: u32,
 
-    fn clear(fb: *FrameBuffer, color: Color) void {
-        const color32: u32 = self.color32(Color);
+    fn clearRect(fb: *FrameBuffer, x2: u32, y2: u32, width: u32, height: u32, color: Color) void {
         var y: u32 = 0;
-        while (y < fb.virtual_height) : (y += 1) {
+        while (y < height) : (y += 1) {
             var x: u32 = 0;
-            while (x < fb.virtual_width) : (x += 1) {
-                fb.drawPixel32(x, y, color32);
+            while (x < width) : (x += 1) {
+                fb.drawPixel(x + x2, y + y2, color);
             }
         }
     }
 
     fn drawPixel(fb: *FrameBuffer, x: u32, y: u32, color: Color) void {
-        drawPixel32(x, y, fb.color32(color));
+        fb.drawPixel32(x, y, color.to32());
     }
 
     fn color32(fb: *FrameBuffer, color: Color) u32 {
-        return 255 - @intCast(u32, color.alpha) << 24 | @intCast(u32, color.red) << 16 | @intCast(u32, color.green) << 8 | @intCast(u32, color.blue) << 0;
+        return color.to32();
     }
 
     fn drawPixel32(fb: *FrameBuffer, x: u32, y: u32, color: u32) void {
-        if (x >= fb.virtual_width or y >= fb.virtual_height) {
-            panicf("frame buffer index {}, {} does not fit in {}x{}", x, y, fb.virtual_width, fb.virtual_height);
-        }
+        assert(x < fb.virtual_width);
+        assert(y < fb.virtual_height);
         fb.words[y * fb.pitch / 4 + x] = color;
     }
 
@@ -113,10 +110,11 @@ pub const FrameBuffer = struct {
         fb.pixel_order = 0;
         fb.alpha_mode = 0;
 
+        var fb_addr: u32 = undefined;
         callVideoCoreProperties(&[_]PropertiesArg{
             tag2(TAG_ALLOCATE_FRAME_BUFFER, 4, 8),
             in(&fb.alignment),
-            out(@ptrCast(*u32, &fb.bytes)),
+            out(&fb_addr),
             out(&fb.size),
             tag(TAG_SET_DEPTH, 4),
             set(&fb.depth),
@@ -142,11 +140,8 @@ pub const FrameBuffer = struct {
             out(&fb.overscan_right),
         });
 
-        if (@ptrToInt(fb.bytes) == 0) {
-            panicf("frame buffer pointer is zero");
-        }
-        fb.bytes = @intToPtr([*]u8, @ptrToInt(fb.bytes) & 0x3FFFFFFF);
-        fb.words = @intToPtr([*]u32, @ptrToInt(fb.bytes));
+        assert(fb_addr != 0);
+        fb.words = @intToPtr([*]volatile u32, fb_addr & 0x3FFFFFFF);
         //      log("fb align {} addr {x} alpha {} pitch {} order {} size {} physical {}x{} virtual {}x{} offset {},{} overscan t {} b {} l {} r {}", fb.alignment, @ptrToInt(fb.bytes), fb.alpha_mode, fb.pitch, fb.pixel_order, fb.size, fb.physical_width, fb.physical_height, fb.virtual_width, fb.virtual_height, fb.virtual_offset_x, fb.virtual_offset_y, fb.overscan_top, fb.overscan_bottom, fb.overscan_left, fb.overscan_right);
     }
 };
@@ -156,6 +151,10 @@ pub const Color = struct {
     green: u8,
     blue: u8,
     alpha: u8,
+
+    fn to32(color: Color) u32 {
+        return (255 - @intCast(u32, color.alpha) << 24) | @intCast(u32, color.red) << 16 | @intCast(u32, color.green) << 8 | @intCast(u32, color.blue) << 0;
+    }
 };
 
 pub const Spritesheet = struct {
